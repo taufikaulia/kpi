@@ -1168,8 +1168,8 @@ kbd{display:inline-block;padding:1px 6px;border:1px solid var(--border);border-r
    Ganti SUPABASE_URL dan SUPABASE_ANON_KEY dengan nilai dari
    project Supabase kamu (Settings → API)
    ============================================================ */
-const SUPABASE_URL  = 'https://GANTI_DENGAN_PROJECT_ID.supabase.co';
-const SUPABASE_ANON_KEY = 'GANTI_DENGAN_ANON_KEY';
+const SUPABASE_URL  = 'https://lcnwxrwbrftzerwwxcmx.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_vFL9TappZtItZqsqelLddA_6WQ_3xTd';
 
 // Helper: Supabase REST API call
 async function sbGet(table, params = {}) {
@@ -1298,7 +1298,7 @@ async function doLogin() {
     const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
       method: 'POST',
       headers: { 'apikey': SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: username + '@narasi.internal', password })
+      body: JSON.stringify({ email: username + '@narasi.tv', password })
     });
     const data = await res.json();
     if (data.access_token) {
