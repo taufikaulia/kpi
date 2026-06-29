@@ -4033,6 +4033,22 @@ async function syncSettingsToSheets() {
         });
       });
     });
+
+    // Hapus baris di kpi_settings yang sudah tidak punya metrik terkait di PICS lagi
+    // (mis. user menghapus metrik di UI lalu klik Simpan). Upsert di bawah HANYA bisa
+    // menambah/memperbarui baris, tidak pernah menghapus — tanpa langkah ini, metrik
+    // yang sudah dihapus akan "muncul lagi" begitu halaman direfresh.
+    try {
+      const existingRows = await sbGet('kpi_settings', { select: 'pic_id,metric_key' });
+      const currentKeys = new Set(settings.map(s => s.pic_id + '|' + s.metric_key));
+      const orphans = (existingRows || []).filter(r => !currentKeys.has(r.pic_id + '|' + r.metric_key));
+      for(const orphan of orphans){
+        await sbDelete('kpi_settings', { pic_id: orphan.pic_id, metric_key: orphan.metric_key });
+      }
+    } catch(cleanupErr){
+      console.warn('Gagal membersihkan metrik lama di kpi_settings:', cleanupErr.message);
+    }
+
     // Upsert semua settings sekaligus (conflict pada pic_id+metric_key)
     await sbUpsert('kpi_settings', settings, 'pic_id,metric_key');
     showToast('✅ Pengaturan KPI berhasil disimpan ke Supabase!');
@@ -4107,8 +4123,24 @@ async function loadKpiSettingsFromSheets(){
       if(!pic) return;
       const orderMap = {}; // metric_key -> sort_order, dipakai untuk reorder pic.metrics di bawah
       picRows.forEach(row=>{
-        const m = pic.metrics.find(x=>x.key===row.metric_key);
-        if(!m) return;
+        let m = pic.metrics.find(x=>x.key===row.metric_key);
+        if(!m){
+          // Metrik ini belum ada di PICS (kemungkinan besar metrik custom yang dibuat lewat
+          // "+ Tambah Metrik" di sesi/browser lain, atau sebelum halaman ini di-refresh).
+          // Tanpa ini, metrik baru akan SELALU hilang setiap kali halaman dimuat ulang —
+          // walau datanya sudah benar tersimpan di Supabase — karena PICS default hanya
+          // berisi metrik bawaan yang di-hardcode di kode.
+          m = {
+            key: row.metric_key,
+            label: row.label || row.metric_key,
+            lowerBetter: false,
+            optional: false,
+            type: row.type || 'angka',
+            actual: { weekly: '–', monthly: '–' },
+            target: { weekly: '', monthly: '' }
+          };
+          pic.metrics.push(m);
+        }
         if(row.label)          m.label        = row.label;
         if(row.type)           m.type         = row.type;
         m.lowerBetter = row.lower_better===true;
