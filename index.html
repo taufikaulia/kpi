@@ -4019,7 +4019,7 @@ async function syncSettingsToSheets() {
   try {
     const settings = [];
     PICS.forEach(pic => {
-      pic.metrics.forEach(m => {
+      pic.metrics.forEach((m, idx) => {
         settings.push({
           pic_id:         pic.id,
           metric_key:     m.key,
@@ -4028,7 +4028,8 @@ async function syncSettingsToSheets() {
           lower_better:   !!m.lowerBetter,
           optional:       !!m.optional,
           target_weekly:  m.target.weekly  || '',
-          target_monthly: m.target.monthly || ''
+          target_monthly: m.target.monthly || '',
+          sort_order:     idx
         });
       });
     });
@@ -4104,6 +4105,7 @@ async function loadKpiSettingsFromSheets(){
     Object.entries(byPic).forEach(([picId, picRows])=>{
       const pic = PICS.find(p=>p.id===picId);
       if(!pic) return;
+      const orderMap = {}; // metric_key -> sort_order, dipakai untuk reorder pic.metrics di bawah
       picRows.forEach(row=>{
         const m = pic.metrics.find(x=>x.key===row.metric_key);
         if(!m) return;
@@ -4113,7 +4115,20 @@ async function loadKpiSettingsFromSheets(){
         m.optional    = row.optional===true;
         if(row.target_weekly  && row.target_weekly!=='–')  m.target.weekly  = row.target_weekly;
         if(row.target_monthly && row.target_monthly!=='–') m.target.monthly = row.target_monthly;
+        if(row.sort_order !== null && row.sort_order !== undefined) orderMap[row.metric_key] = row.sort_order;
       });
+      // Urutkan pic.metrics sesuai sort_order yang tersimpan (hasil drag & drop sebelumnya).
+      // Metrik yang belum punya sort_order (mis. baru ditambahkan, belum pernah disimpan
+      // dengan kolom ini) ditempatkan di akhir tanpa mengubah urutan relatif sesama mereka.
+      if(Object.keys(orderMap).length){
+        pic.metrics.sort((a,b)=>{
+          const oa = orderMap[a.key], ob = orderMap[b.key];
+          if(oa===undefined && ob===undefined) return 0;
+          if(oa===undefined) return 1;
+          if(ob===undefined) return -1;
+          return oa-ob;
+        });
+      }
     });
   } catch(e){
     console.warn('Gagal load kpi_settings dari Supabase:', e.message);
@@ -4497,6 +4512,11 @@ async function refreshFromSheets(){
     renderCards();
     renderOverview();
     rebuildForecastMetricSelect(); // refresh dropdown forecast dengan data historis terbaru
+    // Jika user sedang berada di tab Pengaturan KPI saat refresh ini selesai, render ulang
+    // tabelnya juga — supaya checkbox/field lain langsung mencerminkan data terbaru dari
+    // Supabase tanpa user harus pindah tab dulu untuk memicu render ulang.
+    const settingsPanel = document.getElementById('panel-settings');
+    if(settingsPanel && settingsPanel.classList.contains('active')) renderSettings();
   } catch(e){
     console.warn('Background refresh failed:', e.message);
   }
