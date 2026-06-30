@@ -3561,7 +3561,6 @@ let settingsData = PICS.map(pic=>({
 }));
 
 let settingsActivePic = PICS[0].id;
-let settingsMetricCounter = 1000; // for generating unique keys
 
 function inferType(m){
   // Detect by existing actual/target values. Cek actual dulu (lebih akurat kalau ada data nyata),
@@ -3743,7 +3742,13 @@ function toggleSettingsOptional(picId, idx, isActive){
 function addSettingsMetric(picId){
   const sd=settingsData.find(s=>s.id===picId);
   if(!sd) return;
-  const newKey=picId+'_custom'+(++settingsMetricCounter);
+  // PENTING: key harus unik secara global, termasuk lintas sesi/refresh browser.
+  // Counter sederhana (mis. ++settingsMetricCounter) akan SELALU reset ke nilai awal
+  // setiap halaman dimuat ulang, sehingga menambah metrik baru di lebih dari satu
+  // sesi browser untuk PIC yang sama bisa menghasilkan key yang sama persis —
+  // menyebabkan error "ON CONFLICT DO UPDATE command cannot affect row a second time"
+  // saat disimpan, karena dua baris berbeda mengklaim key yang identik.
+  const newKey = picId+'_custom'+Date.now()+Math.random().toString(36).slice(2,7);
   sd.metrics.push({
     key: newKey,
     label: 'Metrik Baru',
@@ -4034,13 +4039,32 @@ async function syncSettingsToSheets() {
       });
     });
 
+    // Pengaman tambahan: deteksi kalau ada kombinasi pic_id+metric_key yang duplikat
+    // SEBELUM dikirim ke Supabase. Tanpa ini, Supabase akan menolak SELURUH batch dengan
+    // error PostgreSQL yang membingungkan ("ON CONFLICT DO UPDATE cannot affect row a
+    // second time"), dan TIDAK ADA satupun perubahan yang tersimpan — termasuk metrik
+    // lain yang sebenarnya valid. Di sini kita dedupe (pertahankan yang terakhir, karena
+    // itu paling mencerminkan input terbaru user) supaya proses simpan tetap berhasil.
+    const seen = new Map();
+    const duplicateLabels = [];
+    settings.forEach(s => {
+      const dupKey = s.pic_id + '|' + s.metric_key;
+      if(seen.has(dupKey)) duplicateLabels.push(s.label);
+      seen.set(dupKey, s); // overwrite — baris terakhir untuk kombinasi ini yang dipakai
+    });
+    const dedupedSettings = Array.from(seen.values());
+
+    if(duplicateLabels.length){
+      console.warn('Duplikat metric_key terdeteksi & di-dedupe:', duplicateLabels);
+    }
+
     // Hapus baris di kpi_settings yang sudah tidak punya metrik terkait di PICS lagi
     // (mis. user menghapus metrik di UI lalu klik Simpan). Upsert di bawah HANYA bisa
     // menambah/memperbarui baris, tidak pernah menghapus — tanpa langkah ini, metrik
     // yang sudah dihapus akan "muncul lagi" begitu halaman direfresh.
     try {
       const existingRows = await sbGet('kpi_settings', { select: 'pic_id,metric_key' });
-      const currentKeys = new Set(settings.map(s => s.pic_id + '|' + s.metric_key));
+      const currentKeys = new Set(dedupedSettings.map(s => s.pic_id + '|' + s.metric_key));
       const orphans = (existingRows || []).filter(r => !currentKeys.has(r.pic_id + '|' + r.metric_key));
       for(const orphan of orphans){
         await sbDelete('kpi_settings', { pic_id: orphan.pic_id, metric_key: orphan.metric_key });
@@ -4050,8 +4074,12 @@ async function syncSettingsToSheets() {
     }
 
     // Upsert semua settings sekaligus (conflict pada pic_id+metric_key)
-    await sbUpsert('kpi_settings', settings, 'pic_id,metric_key');
-    showToast('✅ Pengaturan KPI berhasil disimpan ke Supabase!');
+    await sbUpsert('kpi_settings', dedupedSettings, 'pic_id,metric_key');
+    if(duplicateLabels.length){
+      showToast('⚠️ Pengaturan disimpan, tapi ditemukan metrik dengan key duplikat ("'+duplicateLabels.join('", "')+'") — hanya versi terakhir yang disimpan. Cek kembali metrik tersebut di Pengaturan KPI.', 6000);
+    } else {
+      showToast('✅ Pengaturan KPI berhasil disimpan ke Supabase!');
+    }
   } catch(e) {
     showToast('⚠️ Pengaturan diterapkan lokal, gagal sync: '+e.message);
   }
